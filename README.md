@@ -21,9 +21,75 @@
 | `hev.yml` | SOCKS5 及隧道配置模板，认证字段须另行填写 |
 | `README.md` | 部署、使用、架构及排障说明 |
 
-部署所需的是 `hev-manager.sh`、`hev-socks5-tunnel` 和 `hev.yml` 三个运行文件。隐藏的 `.ssh`、`.ash_history` 和本地 `.git` 目录不参与代理功能，不需要复制到新设备。
+独立 HEV 模式需要 `hev-manager.sh`、`hev-socks5-tunnel` 和 `hev.yml` 三个运行文件。Leaf + HEV 模式还需要下面列出的 Leaf 文件及统一管理脚本。隐藏的 `.ssh`、`.ash_history` 和本地 `.git` 目录不参与代理功能，不需要复制到新设备。
 
 使用 VMess + WebSocket 时，本仓库已附 Leaf WS UPX 二进制及配置样例；填写私有节点配置后，按 [Leaf 与 HEV 统一管理](HEV-WITH-LEAF.md) 部署。统一模式无需修改正式 `hev.yml` 的代理地址、端口和认证字段；脚本自动生成指向本地 Leaf 的临时配置。
+
+### 目录层级与安装路径
+
+**设备上的正式配置固定放在 `/root/leaf.json` 和 `/root/hev.yml`。** 脚本及两个二进制也放在 `/root/`；只有 Leaf 的 procd 服务需要安装到 `/etc/init.d/leaf`，并把仓库文件名 `leaf-with-runtime.init` 改为 `leaf`。
+
+本机仓库目录：
+
+```text
+~/Desktop/oray-hev/
+├── README.md
+├── HEV-WITH-LEAF.md
+├── FW4-VERIFICATION.md
+├── LEAF-BINARY.md
+├── LEAF-LICENSE
+├── hev-manager.sh
+├── hev-manager-with-leaf.sh
+├── hev-manager-iptables.sh       # 原厂旧固件专用，fw4 模式不使用
+├── leaf-manager.sh
+├── leaf-with-runtime.init       # 上传后改名为 /etc/init.d/leaf
+├── hev-socks5-tunnel
+├── leaf-oray-vmess-ws-upx
+├── leaf-oray-vmess-ws-upx.sha256
+├── hev.yml                      # Git 中的占位模板
+├── leaf.example.json            # Git 中的占位模板
+├── hev.private.yml              # 本地真实 HEV 配置，Git 忽略
+└── leaf.json                    # 从样例复制并填写的真实 Leaf 配置，Git 忽略
+```
+
+设备上的 Leaf + HEV 安装结果：
+
+```text
+/
+├── root/
+│   ├── hev-manager-with-leaf.sh  # 统一模式的操作入口
+│   ├── hev-manager.sh            # 统一脚本调用的 HEV 管理脚本
+│   ├── leaf-manager.sh           # 统一脚本调用的 Leaf 管理脚本
+│   ├── hev-socks5-tunnel         # HEV 可执行文件
+│   ├── leaf-oray-vmess-ws-upx    # Leaf 可执行文件
+│   ├── hev.yml                  # 正式 HEV 配置
+│   ├── leaf.json                # 正式 Leaf 配置
+│   └── HEV-WITH-LEAF.md          # 可选：设备端使用文档
+├── etc/init.d/
+│   └── leaf                     # 来自 leaf-with-runtime.init，由 procd 管理 Leaf
+└── tmp/
+    ├── hev-leaf-manager/
+    │   ├── leaf.json            # 自动生成：上游域名的真实 IP 写入 dns.hosts
+    │   └── hev.yml              # 自动生成：127.0.0.1:1080，移除 SOCKS5 认证
+    ├── hev-manager/
+    │   └── config.yml           # HEV 最终运行配置，含自动生成的 mapdns
+    └── hev-manager.log          # HEV 日志；Leaf 日志由 logd 管理
+```
+
+`/tmp` 中的文件由脚本自动生成，停止时清理，设备重启后消失。日常修改只编辑 `/root/leaf.json` 和 `/root/hev.yml`，然后执行统一脚本的 `restart`，不要编辑临时配置。
+
+| 仓库或本机文件 | 设备目标路径 | 说明 |
+| --- | --- | --- |
+| `leaf.example.json` → 本机 `leaf.json` | `/root/leaf.json` | 填写真实 VMess address、port、uuid、WS Host/path |
+| `hev.yml` → 本机 `hev.private.yml` | `/root/hev.yml` | 上传私有配置时需改名；联合模式自动覆盖运行时 SOCKS5 后端 |
+| `hev-manager-with-leaf.sh` | `/root/hev-manager-with-leaf.sh` | 联合模式使用此入口 |
+| `hev-manager.sh` | `/root/hev-manager.sh` | fw4/nftables 管理 |
+| `leaf-manager.sh` | `/root/leaf-manager.sh` | Leaf 进程管理 |
+| `hev-socks5-tunnel` | `/root/hev-socks5-tunnel` | 名称保持不变 |
+| `leaf-oray-vmess-ws-upx` | `/root/leaf-oray-vmess-ws-upx` | 名称保持不变 |
+| `leaf-with-runtime.init` | `/etc/init.d/leaf` | 上传时改名，不放在 `/root/` 代替服务文件 |
+
+`leaf.example.json` 是模板名，Leaf 服务实际读取的是 `/root/leaf.json`。仓库目录名可以变化，但设备上的上述路径与脚本定义必须一致。
 
 ## 2. 适用条件
 
@@ -41,7 +107,49 @@
 
 ## 3. 部署到设备
 
-在本机进入此目录，将三个运行文件复制到目标设备。下面的 `oray` 是 SSH 别名，部署到另一台设备时替换为它的别名或 `root@设备IP`。
+下面的 `oray` 是 SSH 别名，部署到另一台设备时替换为它的别名或 `root@设备IP`。配置上传命令用于新设备首次部署；已有真实配置的设备只同步脚本和二进制，保留 `/root/leaf.json` 与 `/root/hev.yml`。
+
+### Leaf + HEV 联合模式
+
+在本机仓库目录准备私有配置；`cp -n` 保留已有本地文件：
+
+```sh
+cd ~/Desktop/oray-hev
+cp -n leaf.example.json leaf.json
+cp -n hev.yml hev.private.yml
+chmod 600 leaf.json hev.private.yml
+vi leaf.json
+vi hev.private.yml
+```
+
+Leaf 样例中域名和 UUID 是占位值，必须填写真实节点。联合模式无需把 HEV 配置的 SOCKS5 address/port 改为本地地址，也无需手动注释 username/password，统一脚本会在临时配置中自动处理。
+
+上传文件到对应目录，注意两个改名操作：
+
+```sh
+scp -O hev-manager.sh hev-manager-with-leaf.sh leaf-manager.sh oray:/root/
+scp -O hev-socks5-tunnel leaf-oray-vmess-ws-upx oray:/root/
+scp -O leaf.json oray:/root/leaf.json
+scp -O hev.private.yml oray:/root/hev.yml
+scp -O leaf-with-runtime.init oray:/etc/init.d/leaf
+```
+
+在设备上设置权限并启动：
+
+```sh
+chmod 700 /root/hev-manager.sh /root/hev-manager-with-leaf.sh /root/leaf-manager.sh
+chmod 700 /root/hev-socks5-tunnel /root/leaf-oray-vmess-ws-upx
+chmod 600 /root/leaf.json /root/hev.yml
+chmod 755 /etc/init.d/leaf
+/root/hev-manager-with-leaf.sh check
+/root/hev-manager-with-leaf.sh start
+```
+
+依赖安装见下文。联合模式还需要 procd、jsonfilter 和 `/usr/share/libubox/jshn.sh`。运行后使用统一脚本的 `status / restart / stop / logs`，不要单独重启 Leaf；详细行为见 [HEV-WITH-LEAF.md](HEV-WITH-LEAF.md)。
+
+### 独立 HEV 模式
+
+只使用外部 SOCKS5 时，在本机进入此目录，将三个运行文件复制到目标设备。首次部署后填写设备上的 `/root/hev.yml`：
 
 ```sh
 cd ~/Desktop/oray-hev
@@ -92,6 +200,18 @@ socks5:
 原始 `hev.yml` 不会被脚本覆盖。启动时脚本生成私有运行配置，强制使用 `tun0`，将代理域名替换为当次解析的 IPv4 地址，移除 `pid-file`，并用脚本定义的映射 DNS 配置替换原有 `mapdns` 部分。
 
 ## 4. 日常使用
+
+Leaf + HEV 联合模式使用下面的命令；修改 `/root/leaf.json` 或 `/root/hev.yml` 后执行 `restart`：
+
+```sh
+/root/hev-manager-with-leaf.sh start
+/root/hev-manager-with-leaf.sh status
+/root/hev-manager-with-leaf.sh restart
+/root/hev-manager-with-leaf.sh stop
+/root/hev-manager-with-leaf.sh logs
+```
+
+以下命令和行为表针对独立 HEV 模式：
 
 ```sh
 /root/hev-manager.sh start
