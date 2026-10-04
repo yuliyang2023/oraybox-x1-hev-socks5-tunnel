@@ -375,6 +375,32 @@ tail -f /tmp/hev-manager.log
 
 修改代理地址、端口或密码后执行 `restart`。更换网络或 WAN 地址/网段变化后，需要执行 `restart`。正常的 `/etc/init.d/firewall reload` 会从 fw4 include 重新加载 HEV 规则，不需要重启 HEV；已验证连续两次重载不会重复规则。目前没有开机自启；设备重启后需手动执行 `start`。
 
+### 关闭白色指示灯
+
+本次 X1-3111 的白灯对应 `/sys/class/leds/white:status`。在本机执行以下命令，立即关闭并保存为开机关闭设置：
+
+```sh
+ssh oray '
+uci set system.led_white=led
+uci set system.led_white.name="White LED"
+uci set system.led_white.sysfs="white:status"
+uci set system.led_white.trigger="none"
+uci set system.led_white.default="0"
+uci commit system
+/etc/init.d/led restart
+echo none > /sys/class/leds/white:status/trigger
+echo 0 > /sys/class/leds/white:status/brightness
+'
+```
+
+检查 `ssh oray 'cat /sys/class/leds/white:status/brightness'`，返回 `0` 表示已关闭。本次已验证亮度为 `0`、触发方式为 `none`，配置已保存；没有为验证而重启设备。设置在 OpenWrt 启动 LED 服务后生效，启动早期的 bootloader 指示灯可能仍会亮。该设置不影响 Wi-Fi 和代理功能。
+
+需要恢复白灯常亮时执行：
+
+```sh
+ssh oray 'uci set system.led_white.default="1"; uci commit system; /etc/init.d/led restart'
+```
+
 ### Wi-Fi/LAN 客户端
 
 客户端连接设备的 Wi-Fi，使用 DHCP 获取地址。网关及 DNS 应指向设备的 LAN 地址；例如原设备的 LAN 地址是 `192.168.11.1`，新设备以实际配置为准。使用静态地址的客户端需自行填写网关和 DNS。
