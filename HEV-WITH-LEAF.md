@@ -47,16 +47,26 @@ Leaf 由 procd 管理，异常退出时有限次重启；HEV 保留原脚本的�
 
 ## 在另一台设备部署
 
-从 [Leaf GitHub Actions](https://github.com/yuliyang2023/leaf/actions/workflows/oray-x1-vmess-ws.yml) 下载 `leaf-oray-x1-vmess-ws` 产物，取 `leaf-oray-vmess-ws-upx` 与配置示例。私有节点配置另行填写，不提交到本仓库。CPU 架构必须适配 MIPS 小端软浮点。
+本仓库已提供 `leaf-oray-vmess-ws-upx` 和 `leaf.example.json`。也可从 [Leaf GitHub Actions](https://github.com/yuliyang2023/leaf/actions/workflows/oray-x1-vmess-ws.yml) 下载更新的 `leaf-oray-x1-vmess-ws` 产物。CPU 架构必须适配 MIPS 小端软浮点。
+
+复制样例并填写真实节点：
+
+```sh
+cp leaf.example.json leaf.json
+# 编辑 leaf.json：VMess address、port、uuid 和 WebSocket Host/path
+```
+
+样例的域名和 UUID 均为占位值，不能用于上网。`leaf.json` 被 Git 忽略；只提交 `leaf.example.json`，不要强制提交真实配置。
 
 在本机仓库目录上传脚本：
 
 ```sh
 scp -O hev-manager.sh hev-manager-with-leaf.sh leaf-manager.sh HEV-WITH-LEAF.md oray:/root/
 scp -O leaf-with-runtime.init oray:/etc/init.d/leaf
+scp -O leaf-oray-vmess-ws-upx leaf.json oray:/root/
 ```
 
-另行上传 HEV 与 Leaf 二进制、`hev.yml` 和填写后的 `leaf.json` 到 `/root/`。设备需安装主 README 列出的依赖，并提供 `/usr/share/libubox/jshn.sh`、jsonfilter 和 procd。
+另行按主 README 上传 HEV 二进制与填写后的 `hev.yml`。设备需安装主 README 列出的依赖，并提供 `/usr/share/libubox/jshn.sh`、jsonfilter 和 procd。
 
 在设备上设置权限并启动：
 

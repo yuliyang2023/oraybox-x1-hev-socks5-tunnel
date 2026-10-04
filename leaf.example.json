@@ -1,0 +1,51 @@
+{
+  "log": {
+    "level": "warn",
+    "output": "console"
+  },
+  "inbounds": [
+    {
+      "tag": "local",
+      "protocol": "socks",
+      "address": "127.0.0.1",
+      "port": 1080
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "chain",
+      "settings": {
+        "actors": [
+          "websocket",
+          "vmess"
+        ]
+      }
+    },
+    {
+      "tag": "websocket",
+      "protocol": "ws",
+      "settings": {
+        "path": "/",
+        "headers": {
+          "Host": "node.example.com"
+        }
+      }
+    },
+    {
+      "tag": "vmess",
+      "protocol": "vmess",
+      "settings": {
+        "address": "vmess.example.com",
+        "port": 16618,
+        "uuid": "00000000-0000-4000-8000-000000000001",
+        "security": "chacha20-ietf-poly1305"
+      }
+    }
+  ],
+  "dns": {
+    "servers": [
+      "127.0.0.1"
+    ]
+  }
+}

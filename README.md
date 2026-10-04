@@ -13,6 +13,9 @@
 | `hev-manager-with-leaf.sh` | 同时管理 Leaf 与 HEV，启动前解析上游域名，避免映射 DNS 循环 |
 | `leaf-manager.sh` | Leaf 的独立启动、停止、重启和日志管理 |
 | `leaf-with-runtime.init` | Leaf procd 服务，支持临时配置路径，安装为 `/etc/init.d/leaf` |
+| `leaf-oray-vmess-ws-upx` | 适配 Oray X1 的 Leaf VMess TCP/WS UPX 二进制，约 1.403 MiB |
+| `leaf.example.json` | 不含真实节点信息的 Leaf 配置模板，复制成私有 `leaf.json` 后填写 |
+| `LEAF-BINARY.md` | Leaf 二进制的构建来源、架构和校验说明 |
 | `HEV-WITH-LEAF.md` | Leaf + HEV 统一模式的部署和使用说明 |
 | `hev-socks5-tunnel` | 设备端二进制；名称和部署路径必须与脚本一致 |
 | `hev.yml` | SOCKS5 及隧道配置模板，认证字段须另行填写 |
@@ -20,7 +23,7 @@
 
 部署所需的是 `hev-manager.sh`、`hev-socks5-tunnel` 和 `hev.yml` 三个运行文件。隐藏的 `.ssh`、`.ash_history` 和本地 `.git` 目录不参与代理功能，不需要复制到新设备。
 
-使用 VMess + WebSocket 时，另行准备 Leaf WS UPX 二进制和私有节点配置，按 [Leaf 与 HEV 统一管理](HEV-WITH-LEAF.md) 部署。统一模式无需修改正式 `hev.yml` 的代理地址、端口和认证字段；脚本自动生成指向本地 Leaf 的临时配置。
+使用 VMess + WebSocket 时，本仓库已附 Leaf WS UPX 二进制及配置样例；填写私有节点配置后，按 [Leaf 与 HEV 统一管理](HEV-WITH-LEAF.md) 部署。统一模式无需修改正式 `hev.yml` 的代理地址、端口和认证字段；脚本自动生成指向本地 Leaf 的临时配置。
 
 ## 2. 适用条件
 
