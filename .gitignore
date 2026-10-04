@@ -5,3 +5,7 @@
 hev.yml.bak.*
 nohup.out
 *.log
+hev.private.yml
+leaf.json
+leaf.pending.json
+leaf.json.bak-*

@@ -6,8 +6,8 @@ tunnel:
   ipv6: "fc00::1"
 
 socks5:
-  port: 7890
-  address: ""
+  port: 1080
+  address: "proxy.example.com"
   udp: "udp"
-  username: "name"
-  password: "password"
+  username: "YOUR_USERNAME"
+  password: "YOUR_PASSWORD"

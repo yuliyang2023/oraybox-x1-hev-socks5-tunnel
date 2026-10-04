@@ -1,6 +1,6 @@
 # Oray HEV 代理网关
 
-本目录包含适用于兼容 Oray/OpenWrt 设备的 SOCKS5 代理网关程序、配置和管理脚本。它可以让连接设备 Wi-Fi/LAN 的客户端，以及将设备设为网关的 WAN 同网段客户端，通过 `tun0` 使用 SOCKS5 代理上网。
+本目录包含适用于 OpenWrt fw4/nftables 的 SOCKS5 代理网关程序、配置和管理脚本。已在 OrayBox X1 的 OpenWrt 25.12.2 上验证。原厂 iptables 固件使用保留的 `hev-manager-iptables.sh`，不要混用两版。它可以让连接设备 Wi-Fi/LAN 的客户端，以及将设备设为网关的 WAN 同网段客户端，通过 `tun0` 使用 SOCKS5 代理上网。
 
 `hev-socks5-tunnel` 负责把 TUN 中的 TCP/UDP 流量转换为 SOCKS5 会话；`hev-manager.sh` 负责启动程序、配置路由、防火墙和 DNS，并在停止时恢复原网络配置。仅运行 HEV 二进制不会自动完成客户端流量接管。
 
@@ -8,24 +8,31 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `hev-manager.sh` | 管理脚本，提供 `check / start / stop / restart / status` |
+| `hev-manager.sh` | fw4/nftables 管理脚本，提供 `check / start / stop / restart / status` |
+| `hev-manager-iptables.sh` | 刷机前的原厂 iptables 版，供旧系统使用 |
+| `hev-manager-with-leaf.sh` | 同时管理 Leaf 与 HEV，启动前解析上游域名，避免映射 DNS 循环 |
+| `leaf-manager.sh` | Leaf 的独立启动、停止、重启和日志管理 |
+| `leaf-with-runtime.init` | Leaf procd 服务，支持临时配置路径，安装为 `/etc/init.d/leaf` |
+| `HEV-WITH-LEAF.md` | Leaf + HEV 统一模式的部署和使用说明 |
 | `hev-socks5-tunnel` | 设备端二进制；名称和部署路径必须与脚本一致 |
-| `hev.yml` | SOCKS5 地址、端口、用户名、密码及隧道配置 |
+| `hev.yml` | SOCKS5 及隧道配置模板，认证字段须另行填写 |
 | `README.md` | 部署、使用、架构及排障说明 |
 
-部署所需的是前三个文件。隐藏的 `.ssh`、`.ash_history` 和本地 `.git` 目录不参与代理功能，不需要复制到新设备。
+部署所需的是 `hev-manager.sh`、`hev-socks5-tunnel` 和 `hev.yml` 三个运行文件。隐藏的 `.ssh`、`.ash_history` 和本地 `.git` 目录不参与代理功能，不需要复制到新设备。
+
+使用 VMess + WebSocket 时，另行准备 Leaf WS UPX 二进制和私有节点配置，按 [Leaf 与 HEV 统一管理](HEV-WITH-LEAF.md) 部署。统一模式无需修改正式 `hev.yml` 的代理地址、端口和认证字段；脚本自动生成指向本地 Leaf 的临时配置。
 
 ## 2. 适用条件
 
-脚本针对使用 BusyBox、UCI、dnsmasq 和 iptables 的 OpenWrt 衍生系统编写，以 root 身份运行。
+当前主脚本针对使用 BusyBox、UCI、dnsmasq 和 fw4/nftables 的 OpenWrt 系统编写，以 root 身份运行。
 
 - 二进制必须与目标设备的 CPU 架构兼容。本目录中的程序已在原 OrayBox X1 的 MIPS 系统上运行过，其他型号仍需确认兼容性。
 - 必须有 `/dev/net/tun`，并已开启 IPv4 转发。
-- 需要 `ip`、`iptables`、`ip6tables`、`nslookup`、`sysctl`、`awk`、`readlink`、`flock`、`nohup`、`uci` 及 `/etc/init.d/dnsmasq`。
+- 需要完整版本的 `ip`、`nft`、`fw4`、`nslookup`、`sysctl`、`awk`、`readlink`、`flock`、`nohup`、`uci` 及 `/etc/init.d/dnsmasq`。
 - Wi-Fi/LAN 桥接口默认固定为 `br-lan`。如果新设备使用其他名称，修改脚本开头的 `LAN`。
 - 主路由表中必须有一个可识别的 IPv4 默认路由，以及 WAN、LAN 的直连网段。
 - dnsmasq 的第一个实例不能设置 `noresolv=1`。
-- `tun0`、路由表 `180`、规则优先级 `18010 / 18020 / 18021` 及脚本定义的 `HEV_*` 防火墙链应由本脚本独占。
+- `tun0`、路由表 `180`、规则优先级 `18010 / 18020 / 18021` 、nftables 表 `inet hev_manager` 和 UCI 段 `firewall.hev_manager_forward / firewall.hev_manager_rules` 应由本脚本独占。
 
 脚本按一个 WAN 接口及一个主要直连 IPv4 网段识别网络，未实现多 WAN、多个 WAN 地址或重叠网段的完整处理。
 
@@ -38,6 +45,14 @@ cd ~/Desktop/oray-hev
 scp hev-manager.sh hev-socks5-tunnel hev.yml oray:/root/
 ssh oray
 ```
+
+OpenWrt 25.12 使用 apk 安装依赖（其他版本按实际包管理器调整）：
+
+```sh
+apk add kmod-tun ip-full coreutils-nohup
+```
+
+`flock`、fw4 和 nftables 需已安装；本机官方镜像自带这些工具。脚本使用 nftables 的 `destroy table`，已验证版本为 nftables 1.1.6。
 
 以下命令在设备上执行：
 
@@ -99,7 +114,7 @@ HEV 使用 `nohup` 在后台运行，标准输入连接 `/dev/null`，日志输�
 tail -f /tmp/hev-manager.log
 ```
 
-修改代理地址、端口或密码后执行 `restart`。更换网络、WAN 地址变化或重载防火墙后，也需要执行 `restart`。目前没有开机自启；设备重启后需手动执行 `start`。
+修改代理地址、端口或密码后执行 `restart`。更换网络或 WAN 地址/网段变化后，需要执行 `restart`。正常的 `/etc/init.d/firewall reload` 会从 fw4 include 重新加载 HEV 规则，不需要重启 HEV；已验证连续两次重载不会重复规则。目前没有开机自启；设备重启后需手动执行 `start`。
 
 ### Wi-Fi/LAN 客户端
 
@@ -145,7 +160,9 @@ flowchart LR
 
 路由表 `180` 包含 LAN、WAN 直连网段路由和经 `tun0` 的默认路由，同时保留低优先级的 `unreachable default`。TUN 消失时，客户端流量不会继续回退到主路由表的普通外网默认路由。
 
-防火墙允许客户端 TCP/UDP 到 TUN，以及已建立连接的返回流量；LAN 内部和 WAN 同网段访问有相应放行规则。LAN 到 WAN 网段的普通转发目前会被阻断，不能把“保留直连网段路由”理解为所有跨接口内网访问都放行。
+fw4 的 forward 链前置 include 允许客户端 IPv4 TCP/UDP 到 TUN，以及已建立连接的返回流量。独立 `inet hev_manager` 表在 fw4 前检查转发，阻断客户端绕过 TUN 的外网流量和未代理的 IPv6。LAN/WAN 直连目的网段绕过代理，是否允许跨接口访问由原 fw4 规则决定；默认 LAN 到 WAN 内网可访问，WAN 到 LAN 不新增权限。
+
+运行期间临时关闭软件及硬件流量卸载，避免已卸载连接绕过代理检查；停止时恢复原选项。fw4 include、卸载选项和 DNS 修改均不执行 `uci commit`，设备重启后恢复持久配置。
 
 脚本关闭 WAN 侧 ICMP 重定向，避免设备建议同网段客户端绕过代理网关、直接使用上游路由器；同时调整反向路径过滤以适应策略路由。
 
@@ -173,7 +190,7 @@ sequenceDiagram
 - 客户端普通端口 `53` 的 TCP/UDP DNS 请求会被重定向，包括发给设备自身或上游路由器的请求。
 - dnsmasq 临时使用 `/tmp/hev-manager-resolv.conf`，让设备本地 DNS 查询也使用映射 DNS。该文件只有 DNS 地址，以 `644` 权限供降权运行的 dnsmasq 读取；含凭据的运行配置保留在私有目录内。
 - 主路由表额外加入映射 DNS 地址和地址池到 `tun0` 的路由。
-- DNS 切换只使用运行时 `uci set`，不执行 `uci commit`。不要在代理运行期间提交这些临时设置到持久配置。
+- DNS 和 firewall include 只使用运行时 `uci set`，不执行 `uci commit`。不要在代理运行期间提交这些临时设置到持久配置。
 
 映射 DNS 不等同于完整的常规 DNS 解析服务。内网专用 DNS、特殊记录类型或需要真实目标 IP 的应用，应另行验证兼容性。加密 DNS 使用其他端口，不属于上述端口 `53` 重定向规则。
 
@@ -194,6 +211,9 @@ UDP 转发仍依赖 SOCKS5 服务器支持对应的中继方式。映射 DNS 修
 | `/tmp/hev-manager/network` | 启动时识别到的 WAN/LAN 信息 |
 | `/tmp/hev-manager/sysctl-save` | 启动前的相关内核参数 |
 | `/tmp/hev-manager/dns-resolvfile` | dnsmasq 原来的解析文件路径 |
+| `/tmp/hev-manager/forward.nft` | fw4 转发链前置权限规则 |
+| `/tmp/hev-manager/rules.nft` | 独立 nftables 表、DNS 接管和阻断规则 |
+| `/tmp/hev-manager/flow_offloading*` | 流量卸载选项的启动前值 |
 | `/tmp/hev-manager/active` | 规则安装完成的标记，不代表代理健康 |
 | `/tmp/hev-manager/mapped-routes` | 映射地址路由的管理标记 |
 | `/tmp/hev-manager-resolv.conf` | 供 dnsmasq 读取的临时上游配置 |
@@ -204,7 +224,7 @@ UDP 转发仍依赖 SOCKS5 服务器支持对应的中继方式。映射 DNS 修
 
 ### 正常停止
 
-`stop` 删除脚本的防火墙链及跳转、策略路由和映射地址路由，恢复保存的内核参数，恢复 dnsmasq 原解析文件并重启 DNS 服务，然后停止 HEV。原始 `hev.yml` 保留。
+`stop` 删除脚本的 fw4 include 和独立 nftables 表，恢复流量卸载选项并重载 fw4，清理策略路由和映射地址路由，恢复保存的内核参数，恢复 dnsmasq 原解析文件并重启 DNS 服务，然后停止 HEV。原始 `hev.yml` 保留。
 
 DNS 恢复以当前 dnsmasq 仍使用本脚本的临时解析文件为条件，避免覆盖用户在运行期间另行修改的解析文件设置。这是对脚本所管理配置的恢复，不是整台设备配置的完整快照回滚。
 
@@ -218,7 +238,7 @@ DNS 恢复以当前 dnsmasq 仍使用本脚本的临时解析文件为条件，�
 - 当前没有定时连通性探测、自动重启、备用代理切换或主动告警。
 - `status` 中的进程存活和 `active` 标记不等于实际代理可用。
 - 代理域名在启动时解析并固定为 IPv4，域名对应地址变化后需执行 `restart`。
-- 防火墙重载或其他程序修改规则可能破坏上述保护；当前没有自动修复规则的后台监控。
+- 正常 fw4 重载会重新加载运行期规则；直接清空 nftables 规则或其他程序改动仍可能破坏保护，当前没有自动修复规则的后台监控。
 
 ## 7. 验证与排障
 
@@ -250,9 +270,8 @@ nslookup example.com 127.0.0.1
 ```sh
 curl -sS -m 15 -o /dev/null -w 'HTTP=%{http_code}\n' http://example.com
 curl -sS -m 15 -o /dev/null -w 'HTTPS=%{http_code}\n' https://www.baidu.com
-iptables -nvL HEV_LAN
-iptables -t nat -nvL HEV_CLIENT_DNS
-iptables -nvL HEV_DNS_GUARD
+nft list chain inet fw4 forward
+nft list table inet hev_manager
 ```
 
 设备端测试不能替代客户端测试。手机先断开重连 Wi-Fi，再打开网页，观察 `br-lan → tun0` 和 `tun0 → br-lan` 的计数是否增加。
@@ -264,7 +283,7 @@ iptables -nvL HEV_DNS_GUARD
 | 域名能解析但连接失败 | SOCKS5 地址、端口、认证和服务端连通性 |
 | WAN 同网段机器没有走代理 | 客户端网关、源网段、识别到的 WAN 接口和 `18021` 规则 |
 | 某些应用失败但网页正常 | UDP 支持、映射 DNS 兼容性及客户端 IPv6 路径 |
-| 防火墙重载后异常 | 执行 `restart` 重新安装脚本规则 |
+| 防火墙重载后异常 | 检查 fw4 include 和运行文件；普通 reload 应保留规则，异常时执行 `restart` |
 | `tun0`、表或链已存在 | 排查其他管理程序，避免重复启动或混用不同配置脚本 |
 | 停止后仍打不开网页 | 重新连接网络或刷新客户端缓存，检查原上游网络是否正常 |
 
