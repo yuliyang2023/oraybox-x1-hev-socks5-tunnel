@@ -109,6 +109,142 @@
 
 下面的 `oray` 是 SSH 别名，部署到另一台设备时替换为它的别名或 `root@设备IP`。配置上传命令用于新设备首次部署；已有真实配置的设备只同步脚本和二进制，保留 `/root/leaf.json` 与 `/root/hev.yml`。
 
+### 原厂 X1 刷入官方 OpenWrt
+
+已实机完成 X1-4111 和 X1-3111 的原厂固件迁移，使用同一份官方 **OpenWrt 25.12.2 / ramips/mt76x8 / oraybox_x1** 镜像。以下步骤记录原厂系统通过 SSH 刷机的流程；已经运行官方 OpenWrt 的设备可直接跳到代理部署部分。
+
+#### 1. 先核实实际硬件
+
+在本机执行只读检查：
+
+```sh
+ssh oray 'ubus call system board; cat /proc/cpuinfo; cat /proc/mtd; dmesg | head -n 115'
+```
+
+此次 X1-3111 实测为 `HC-WT6271-128`、MT7628AN、128 MiB RAM、16 MiB GD25Q128 NOR。原厂版本是 5.5.1 / Linux 4.4.157，bootloader 为 U-Boot 1.1.3。官方 [X1 支持记录](https://github.com/openwrt/openwrt/commit/6b66666da46dd50d4bd2cb1b94fd35ec7f10e54c) 和 [25.12.2 设备树](https://github.com/openwrt/openwrt/blob/v25.12.2/target/linux/ramips/dts/mt7628an_oraybox_x1.dts) 与该设备的固件起点、身份分区位置及 GPIO 相符：LED 为 37/1/44，复位为 38。
+
+不能只凭“X1”名称刷写；另一台设备应重新核实硬件、分区和 bootloader。不同设备的完整 Flash、factory 无线校准数据、MAC、SSH host key 和恢复包不能互相复制。
+
+#### 2. 备份该设备的 Flash 和配置
+
+以下分区编号仅适用于本次核验的原厂布局：
+
+| 原厂分区 | 设备文件 | 大小 | 用途 |
+| --- | --- | ---: | --- |
+| u-boot | `/dev/mtd0ro` | `0x30000` | bootloader |
+| kpanic | `/dev/mtd1ro` | `0x10000` | 崩溃记录 |
+| factory | `/dev/mtd2ro` | `0x10000` | 无线校准数据 |
+| firmware | `/dev/mtd3ro` | `0xf90000` | 原厂内核、根文件系统及可写层 |
+| bdinfo | `/dev/mtd7ro` | `0x10000` | 设备身份数据 |
+| reserve | `/dev/mtd8ro` | `0x10000` | 保留分区 |
+
+在本机将备份放到独立的私有目录；根据设备修改目录名前缀，随机后缀可避免覆盖已有备份。任一备份命令失败时停止，排查后重新备份：
+
+```sh
+umask 077
+backup_dir=$(mktemp -d "$HOME/Desktop/oray-x1-3111-backup-XXXXXXXX")
+ssh oray 'cat /dev/mtd0ro' > "$backup_dir/uboot.bin"
+ssh oray 'cat /dev/mtd1ro' > "$backup_dir/kpanic.bin"
+ssh oray 'cat /dev/mtd2ro' > "$backup_dir/factory.bin"
+ssh oray 'cat /dev/mtd3ro' > "$backup_dir/firmware.bin"
+ssh oray 'cat /dev/mtd7ro' > "$backup_dir/bdinfo.bin"
+ssh oray 'cat /dev/mtd8ro' > "$backup_dir/reserve.bin"
+ssh oray 'tar -czf - /etc /root 2>/dev/null' > "$backup_dir/config-root.tar.gz"
+cat "$backup_dir/uboot.bin" "$backup_dir/kpanic.bin" "$backup_dir/factory.bin" \
+    "$backup_dir/firmware.bin" "$backup_dir/bdinfo.bin" "$backup_dir/reserve.bin" \
+    > "$backup_dir/fullflash.bin"
+wc -c "$backup_dir/fullflash.bin"
+```
+
+完整 Flash 必须是 **16,777,216 字节**。逐分区核对本机文件与设备读出的 MD5，再保存本机 SHA-256 清单；原厂缺少 `sha256sum` 时可以使用 `md5sum` 校验传输。例如，本机 macOS 使用 `md5 -q "$backup_dir/factory.bin"`，设备使用 `ssh oray 'md5sum /dev/mtd2ro'`。这些备份可能含账号、密码、密钥和校准数据，不提交 Git。
+
+#### 3. 下载并校验官方固件
+
+```sh
+image_name=openwrt-25.12.2-ramips-mt76x8-oraybox_x1-squashfs-sysupgrade.bin
+curl -fL -o "$backup_dir/$image_name" \
+    "https://downloads.openwrt.org/releases/25.12.2/targets/ramips/mt76x8/$image_name"
+shasum -a 256 "$backup_dir/$image_name"
+```
+
+该镜像官方 SHA-256 为：
+
+```text
+b8e7dd484190355b453b593b5cc7d480208bf363823fed2dea2d7b7aadd31f74
+```
+
+可对照 [官方校验清单](https://downloads.openwrt.org/releases/25.12.2/targets/ramips/mt76x8/sha256sums)。使用 `squashfs-sysupgrade.bin`；此次刷机还检查了 uImage 头和内核数据 CRC，以及 bootloader 对 LZMA 内核格式的支持。
+
+#### 4. 制作这台设备专属的恢复包
+
+`openwrt-restore.tar.gz` 内使用相对于 `/` 的路径，例如：
+
+```text
+restore/
+├── etc/
+│   ├── passwd / group / shadow              # 官方账号模板，仅迁移本机 root 密码哈希
+│   ├── config/network                       # 为新系统重新生成
+│   ├── config/dropbear                      # 保留端口 22，关闭密码认证
+│   ├── dropbear/authorized_keys             # 本机已有的授权公钥
+│   ├── dropbear/dropbear_rsa_host_key        # 本机原有 SSH host key
+│   └── uci-defaults/99-oray-migration        # 一次性恢复 Wi-Fi、时区和 WAN SSH 规则
+└── root/                                   # 需要保留的本机文件
+```
+
+恢复包须按新设备当前设置制作，不能直接打包整个原厂 `/etc` 覆盖官方系统：
+
+- 保留这台设备的 WAN MAC，WAN 使用 DHCP，网口 VLAN 经核实使用 `eth0.1`、switch 端口 `3 6t`。
+- LAN 使用 `br-lan` 并保留本机原 LAN 地址；新 X1-3111 为 `192.168.10.1`，上一台为 `192.168.11.1`。
+- 一次性脚本设置原 SSID、Wi-Fi 密码、WPA2 AES，并同时设置 `wireless.radio0.disabled=0` 和 `wireless.default_radio0.disabled=0`；只启用 radio0 仍可能不广播 Wi-Fi。
+- 保留授权 SSH 公钥，使用本机原 SSH host key；此次关闭密码登录，并添加 fw4 的 WAN TCP/22 放行规则以保留现有管理路径。
+- 不恢复原厂后台服务和旧防火墙配置，不开启代理自启动。
+
+完成恢复目录后检查 shell 语法，再在本机打包：
+
+```sh
+sh -n "$backup_dir/restore/etc/uci-defaults/99-oray-migration"
+tar -czf "$backup_dir/openwrt-restore.tar.gz" -C "$backup_dir/restore" etc root
+chmod 600 "$backup_dir/openwrt-restore.tar.gz"
+```
+
+上面的目录树说明恢复包结构，并不自动生成网络配置和一次性脚本。确认包内容、SSH 授权和设备专属设置正确后，才进行下一步。
+
+#### 5. 上传、预检并刷写
+
+```sh
+scp -O "$backup_dir/$image_name" oray:/tmp/openwrt-oray-x1.bin
+scp -O "$backup_dir/openwrt-restore.tar.gz" oray:/tmp/openwrt-restore.tar.gz
+ssh oray 'md5sum /tmp/openwrt-oray-x1.bin /tmp/openwrt-restore.tar.gz'
+```
+
+将上传文件 MD5 与本机同名文件比较。原厂检查器要求厂商镜像格式，官方镜像会报 `Not kuhead image` / `image format error`；此次已检查原厂 `/lib/upgrade/hcmt.sh`，该镜像校验失败后回退到 `default_do_upgrade`，由 mtd 写入 **firmware 分区**，不写 bootloader 或 factory。
+
+本次经上述独立核验后使用 `-F` 覆盖原厂格式检查。`-F` 本身不能证明兼容，`-T -F` 也不能替代硬件、分区、镜像校验和升级代码检查。其他固件或分区布局不能照抄。
+
+```sh
+# 只预检，不刷写
+ssh oray 'sysupgrade -T -F -f /tmp/openwrt-restore.tar.gz /tmp/openwrt-oray-x1.bin'
+
+# 正式刷写并自动重启，执行前确认电源稳定
+ssh oray 'sysupgrade -F -f /tmp/openwrt-restore.tar.gz /tmp/openwrt-oray-x1.bin'
+```
+
+看到 `Upgrade completed` 和 `Rebooting system...` 后等待首次启动初始化，不要在写入过程中断电。SSH 会暂时断开；恢复地址依 DHCP 分配结果确认，不保证始终是 `192.168.1.3`。
+
+#### 6. 刷后验证并部署代理
+
+```sh
+ssh oray 'ubus call system board; ip -4 addr; ip route; df -k /overlay; iw dev'
+ssh oray 'uci -q get wireless.radio0.disabled; uci -q get wireless.default_radio0.disabled'
+ssh oray 'nslookup example.com; wget -T 20 -O /dev/null https://example.com/'
+```
+
+本次 X1-3111 已验证 OpenWrt 25.12.2 / Linux 6.12.74，WAN `192.168.1.3`、LAN `192.168.10.1`，Wi-Fi `AP-ENABLED`，原 SSID/密码与 WAN MAC 保留，外网 HTTPS 成功。刷后再次读取并核对 u-boot、factory、bdinfo、reserve，校验均与刷前一致。刷机后 overlay 总量 **9408 KiB**、可用 **8972 KiB（8.76 MiB）**。
+
+随后按下文部署 Leaf + HEV，完整代理 HTTP/HTTPS 验证通过，部署后剩余 **6692 KiB（6.54 MiB）**。手机 Wi-Fi 客户端和 UDP 业务需另行实测。两种模式都没有默认开机启动。
+
+本次私有备份目录为 `~/Desktop/oray-x1-3111-backup-20261005/`；旧设备备份为 `~/Desktop/oray-flash-backup-20261004/`。完整 Flash 恢复涉及 bootloader，需要独立核验的救援方式；本 README 不提供从运行系统直接覆盖 fullflash 的命令。
+
 ### Leaf + HEV 联合模式
 
 在本机仓库目录准备私有配置；`cp -n` 保留已有本地文件：

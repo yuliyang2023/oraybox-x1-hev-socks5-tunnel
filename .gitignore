@@ -9,3 +9,10 @@ hev.private.yml
 leaf.json
 leaf.pending.json
 leaf.json.bak-*
+# Device-specific firmware backups and migration packages contain private data.
+flash-backup*/
+oray-flash-backup*/
+oray-x1-*-backup*/
+openwrt-restore.tar.gz
+config-root.tar.gz
+migration-settings.json
