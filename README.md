@@ -19,6 +19,7 @@
 | `leaf.example.json` | 不含真实节点信息的 Leaf 配置模板，复制成私有 `leaf.json` 后填写 |
 | `LEAF-BINARY.md` | Leaf 二进制的构建来源、架构和校验说明 |
 | `easytier-mini-oray-wss-upx` | EasyTier Mini 2.7.0，支持 WS/WSS，UPX 版约 1.679 MiB |
+| `easytier-manager.sh` | EasyTier 后台启动、停止、重启、状态、前置检查和日志管理 |
 | `easytier.example.conf` | 脱敏 TOML 配置模板，复制为私有 `easytier.conf` 后填写组网参数 |
 | `EASYTIER-BINARY.md` | EasyTier 构建来源、许可证及验证范围 |
 | `HEV-WITH-LEAF.md` | Leaf + HEV 统一模式的部署和使用说明 |
@@ -49,6 +50,7 @@
 ├── hev-manager-with-leaf.sh
 ├── hev-manager-iptables.sh       # 原厂旧固件专用，fw4 模式不使用
 ├── leaf-manager.sh
+├── easytier-manager.sh
 ├── leaf-with-runtime.init       # 上传后改名为 /etc/init.d/leaf
 ├── hev-socks5-tunnel
 ├── leaf-oray-vmess-ws-upx
@@ -76,6 +78,7 @@
 │   ├── hev.yml                  # 正式 HEV 配置
 │   ├── leaf.json                # 正式 Leaf 配置
 │   ├── easytier-mini            # 可选：来自 easytier-mini-oray-wss-upx
+│   ├── easytier-manager.sh      # EasyTier 操作入口
 │   ├── easytier.conf            # 可选：正式组网配置
 │   └── HEV-WITH-LEAF.md          # 可选：设备端使用文档
 ├── etc/init.d/
@@ -88,6 +91,7 @@
     │   └── config.yml           # HEV 最终运行配置，含自动生成的 mapdns
     ├── hev-manager.log          # HEV 日志；Leaf 日志由 logd 管理
     ├── easytier-mini.log        # EasyTier nohup 日志
+    ├── easytier-manager/        # 管理脚本记录 PID、启动时间、配置校验和
     └── easytier-mini.pid        # EasyTier 后台启动时记录的 PID
 ```
 
@@ -104,6 +108,7 @@
 | `leaf-oray-vmess-ws-upx` | `/root/leaf-oray-vmess-ws-upx` | 名称保持不变 |
 | `leaf-with-runtime.init` | `/etc/init.d/leaf` | 上传时改名，不放在 `/root/` 代替服务文件 |
 | `easytier-mini-oray-wss-upx` | `/root/easytier-mini` | 上传时改名，存放在持久 Flash |
+| `easytier-manager.sh` | `/root/easytier-manager.sh` | 只管理 EasyTier，不停止 Leaf + HEV |
 | `easytier.example.conf` → 本机 `easytier.conf` | `/root/easytier.conf` | 填写真实组网名称、密钥、节点地址及虚拟 IP |
 
 `leaf.example.json` 是模板名，Leaf 服务实际读取的是 `/root/leaf.json`。仓库目录名可以变化，但设备上的上述路径与脚本定义必须一致。
@@ -397,6 +402,7 @@ cp -n easytier.example.conf easytier.conf
 # 编辑 easytier.conf，填写真实组网参数
 shasum -a 256 -c easytier-mini-oray-wss-upx.sha256
 scp -O easytier-mini-oray-wss-upx oray:/root/easytier-mini.next
+scp -O easytier-manager.sh oray:/root/easytier-manager.sh
 # 仅新设备首次部署配置：
 scp -O easytier.conf oray:/root/easytier.conf
 ```
@@ -423,6 +429,7 @@ if [ -f /root/easytier-mini ]; then
 fi
 mv /root/easytier-mini.next /root/easytier-mini
 chmod 700 /root/easytier-mini
+chmod 700 /root/easytier-manager.sh
 chmod 600 /root/easytier.conf
 ```
 
@@ -476,30 +483,46 @@ tail -f /tmp/hev-manager.log
 
 ```sh
 /root/hev-manager-with-leaf.sh start
-if pidof easytier-mini >/dev/null; then
-    echo 'EasyTier already running; stop it before restarting'
-else
-    nohup /root/easytier-mini --config /root/easytier.conf \
-        </dev/null >/tmp/easytier-mini.log 2>&1 &
-    echo $! > /tmp/easytier-mini.pid
-fi
+/root/easytier-manager.sh start
+/root/easytier-manager.sh status
+/root/easytier-manager.sh restart
+/root/easytier-manager.sh logs
+# 持续查看日志，Ctrl+C 只退出日志查看
+/root/easytier-manager.sh logs -f
 ```
 
-`nohup` 为后台启动，断开 SSH 后继续运行；没有默认开机自启。
+管理脚本使用 `nohup` 后台启动，断开 SSH 后继续运行；没有默认开机自启。
 直接执行 `./easytier-mini --config easytier.conf` 则是前台启动，Ctrl+C 会停止。
+
+| 命令 | 行为 |
+| --- | --- |
+| `start` | 检查前置条件并后台启动；已有相同程序及配置的实例时接管，不重复启动 |
+| `stop` | 使用 INT 优雅停止，超时后尝试 TERM；只停止 EasyTier，保留 Leaf + HEV |
+| `restart` | 先检查，再停止和启动 EasyTier |
+| `status` | 默认命令；显示实际进程、配置及 TUN 地址，提示配置变更或网卡未就绪 |
+| `check` | 检查程序、命令、TUN 设备及必要标志；不是完整 TOML 校验或网络健康检测 |
+| `logs` / `logs -f` | 显示最近 80 行日志 / 持续查看日志 |
+
+脚本使用文件锁防止启动/停止操作并发，后台进程不持有该锁。进程识别同时核对
+可执行文件和配置路径，发送信号前还核对启动时间，不单凭 PID 文件停止进程。
+只处理 `/root/easytier-mini --config /root/easytier.conf` 对应的实例，
+不会强行删除其他程序的网卡。已存在同名 TUN 却没有匹配进程时拒绝启动。
+PID、启动时间和源配置校验和保存在 `/tmp/easytier-manager/`，同时维护
+`/tmp/easytier-mini.pid`。接管手动启动的进程时，无法确认其已加载的配置版本，
+需要确定配置已生效时执行一次 `restart`。
 
 在设备上查看状态或停止 EasyTier：
 
 ```sh
 pidof easytier-mini
 ip -4 addr show et0
-tail -n 30 /tmp/easytier-mini.log
+/root/easytier-manager.sh status
 
-# 停止当前 Mini，等待 pidof 无输出后再重新启动
-for p in $(pidof easytier-mini); do kill -INT "$p"; done
+# 只停止当前 Mini，不停止 Leaf + HEV
+/root/easytier-manager.sh stop
 ```
 
-修改配置后先停止再启动；重启 Leaf + HEV 会重新建立映射 DNS，随后也应重启
+修改配置后执行 `restart`；重启 Leaf + HEV 会重新建立映射 DNS，随后也应重启
 EasyTier，避免它继续使用旧映射地址。关闭整个组合时，先停止 EasyTier，
 再执行 `/root/hev-manager-with-leaf.sh stop`。
 
