@@ -16,3 +16,9 @@ oray-x1-*-backup*/
 openwrt-restore.tar.gz
 config-root.tar.gz
 migration-settings.json
+# Private EasyTier mesh credentials and device backups.
+easytier.conf
+easytier.conf.*
+easytier-mini.pre-*
+hosts.pre-easytier-*
+easytier-backup*/

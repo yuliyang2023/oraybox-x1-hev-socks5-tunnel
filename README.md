@@ -4,6 +4,8 @@
 
 `hev-socks5-tunnel` 负责把 TUN 中的 TCP/UDP 流量转换为 SOCKS5 会话；`hev-manager.sh` 负责启动程序、配置路由、防火墙和 DNS，并在停止时恢复原网络配置。仅运行 HEV 二进制不会自动完成客户端流量接管。
 
+本仓库还包含适用于 X1 的 EasyTier Mini WS/WSS UPX 版，用 `et0` 提供组网。当前网络的 WSS 直连存在 DNS 和 TLS 可达性问题，已验证通过 Leaf + HEV 的代理路径连接中继；能直连服务器的网络可独立运行 EasyTier。
+
 ## 1. 文件介绍
 
 | 文件 | 用途 |
@@ -16,6 +18,9 @@
 | `leaf-oray-vmess-ws-upx` | 适配 Oray X1 的 Leaf VMess TCP/WS UPX 二进制，约 1.403 MiB |
 | `leaf.example.json` | 不含真实节点信息的 Leaf 配置模板，复制成私有 `leaf.json` 后填写 |
 | `LEAF-BINARY.md` | Leaf 二进制的构建来源、架构和校验说明 |
+| `easytier-mini-oray-wss-upx` | EasyTier Mini 2.7.0，支持 WS/WSS，UPX 版约 1.679 MiB |
+| `easytier.example.conf` | 脱敏 TOML 配置模板，复制为私有 `easytier.conf` 后填写组网参数 |
+| `EASYTIER-BINARY.md` | EasyTier 构建来源、许可证及验证范围 |
 | `HEV-WITH-LEAF.md` | Leaf + HEV 统一模式的部署和使用说明 |
 | `hev-socks5-tunnel` | 设备端二进制；名称和部署路径必须与脚本一致 |
 | `hev.yml` | SOCKS5 及隧道配置模板，认证字段须另行填写 |
@@ -27,7 +32,7 @@
 
 ### 目录层级与安装路径
 
-**设备上的正式配置固定放在 `/root/leaf.json` 和 `/root/hev.yml`。** 脚本及两个二进制也放在 `/root/`；只有 Leaf 的 procd 服务需要安装到 `/etc/init.d/leaf`，并把仓库文件名 `leaf-with-runtime.init` 改为 `leaf`。
+**设备上的正式配置放在 `/root/leaf.json`、`/root/hev.yml`，以及可选的 `/root/easytier.conf`。** 脚本及二进制也放在 `/root/`；EasyTier 二进制上传时改名为 `easytier-mini`。只有 Leaf 的 procd 服务需要安装到 `/etc/init.d/leaf`，并把仓库文件名 `leaf-with-runtime.init` 改为 `leaf`。
 
 本机仓库目录：
 
@@ -38,6 +43,8 @@
 ├── FW4-VERIFICATION.md
 ├── LEAF-BINARY.md
 ├── LEAF-LICENSE
+├── EASYTIER-BINARY.md
+├── EASYTIER-LICENSE
 ├── hev-manager.sh
 ├── hev-manager-with-leaf.sh
 ├── hev-manager-iptables.sh       # 原厂旧固件专用，fw4 模式不使用
@@ -46,6 +53,10 @@
 ├── hev-socks5-tunnel
 ├── leaf-oray-vmess-ws-upx
 ├── leaf-oray-vmess-ws-upx.sha256
+├── easytier-mini-oray-wss-upx
+├── easytier-mini-oray-wss-upx.sha256
+├── easytier.example.conf        # Git 中的脱敏组网模板
+├── easytier.conf                # 本地真实组网配置，Git 忽略
 ├── hev.yml                      # Git 中的占位模板
 ├── leaf.example.json            # Git 中的占位模板
 ├── hev.private.yml              # 本地真实 HEV 配置，Git 忽略
@@ -64,6 +75,8 @@
 │   ├── leaf-oray-vmess-ws-upx    # Leaf 可执行文件
 │   ├── hev.yml                  # 正式 HEV 配置
 │   ├── leaf.json                # 正式 Leaf 配置
+│   ├── easytier-mini            # 可选：来自 easytier-mini-oray-wss-upx
+│   ├── easytier.conf            # 可选：正式组网配置
 │   └── HEV-WITH-LEAF.md          # 可选：设备端使用文档
 ├── etc/init.d/
 │   └── leaf                     # 来自 leaf-with-runtime.init，由 procd 管理 Leaf
@@ -73,10 +86,12 @@
     │   └── hev.yml              # 自动生成：127.0.0.1:1080，移除 SOCKS5 认证
     ├── hev-manager/
     │   └── config.yml           # HEV 最终运行配置，含自动生成的 mapdns
-    └── hev-manager.log          # HEV 日志；Leaf 日志由 logd 管理
+    ├── hev-manager.log          # HEV 日志；Leaf 日志由 logd 管理
+    ├── easytier-mini.log        # EasyTier nohup 日志
+    └── easytier-mini.pid        # EasyTier 后台启动时记录的 PID
 ```
 
-`/tmp` 中的文件由脚本自动生成，停止时清理，设备重启后消失。日常修改只编辑 `/root/leaf.json` 和 `/root/hev.yml`，然后执行统一脚本的 `restart`，不要编辑临时配置。
+`/tmp/hev-*` 中的运行配置由管理脚本自动生成，停止时清理；`/tmp` 中所有文件在设备重启后消失。Leaf 与 HEV 日常修改只编辑 `/root/leaf.json` 和 `/root/hev.yml`，然后执行统一脚本的 `restart`，不要编辑临时配置。EasyTier 独立读取 `/root/easytier.conf`，修改后需单独重启。
 
 | 仓库或本机文件 | 设备目标路径 | 说明 |
 | --- | --- | --- |
@@ -88,6 +103,8 @@
 | `hev-socks5-tunnel` | `/root/hev-socks5-tunnel` | 名称保持不变 |
 | `leaf-oray-vmess-ws-upx` | `/root/leaf-oray-vmess-ws-upx` | 名称保持不变 |
 | `leaf-with-runtime.init` | `/etc/init.d/leaf` | 上传时改名，不放在 `/root/` 代替服务文件 |
+| `easytier-mini-oray-wss-upx` | `/root/easytier-mini` | 上传时改名，存放在持久 Flash |
+| `easytier.example.conf` → 本机 `easytier.conf` | `/root/easytier.conf` | 填写真实组网名称、密钥、节点地址及虚拟 IP |
 
 `leaf.example.json` 是模板名，Leaf 服务实际读取的是 `/root/leaf.json`。仓库目录名可以变化，但设备上的上述路径与脚本定义必须一致。
 
@@ -335,6 +352,83 @@ socks5:
 
 原始 `hev.yml` 不会被脚本覆盖。启动时脚本生成私有运行配置，强制使用 `tun0`，将代理域名替换为当次解析的 IPv4 地址，移除 `pid-file`，并用脚本定义的映射 DNS 配置替换原有 `mapdns` 部分。
 
+### EasyTier Mini WS/WSS 配置与部署
+
+仓库中的 `easytier.example.conf` 是脱敏样例，实际读取的文件是设备上的
+**`/root/easytier.conf`**。虽然后缀为 `.conf`，内容使用 TOML 格式：
+
+```toml
+ipv4 = "10.126.126.2"
+listeners = [
+    "tcp://0.0.0.0:11010",
+    "udp://0.0.0.0:11010",
+    "ws://0.0.0.0:11011/",
+    "wss://0.0.0.0:11012/",
+]
+
+[network_identity]
+network_name = "YOUR_NETWORK_NAME"
+network_secret = "YOUR_NETWORK_SECRET"
+
+[[peer]]
+uri = "wss://relay.example.com:8443/ws"
+
+[flags]
+bind_device = false
+dev_name = "et0"
+```
+
+填写同一组网使用的真实名称和密钥，以及真实 WSS 域名、端口、路径；不要把
+`relay.example.com` 当作可用服务器。虚拟 IP 必须按自己的组网网段选择，且不能
+与其他节点重复或与所在地 LAN/WAN 网段冲突。端口 `8443` 和路径 `/ws` 只是示例。
+仅作为出站客户端时，可以删除不需要的 WS/WSS 监听项。
+
+- `dev_name = "et0"` 放在 `[flags]` 下，避免与 HEV 的 `tun0` 重名。
+- `bind_device = false` 让 WSS 连接遵循系统路由。默认物理网卡绑定会绕过 HEV，
+  本次出现过域名已映射到 `198.19.*` 但连接仍超时的情况。
+- 这个 Mini 支持 WS/WSS，但不包含 WireGuard、QUIC、KCP 或完整核心的全部功能。
+  管理 RPC 固定为 `127.0.0.1:15888`，不需要添加原完整版本的 RPC 配置。
+- 本样例和 Git 中的配置不含真实节点信息；私有 `easytier.conf` 与其备份均被忽略。
+
+在本机仓库目录准备配置、校验并上传；已有真实设备配置时不要执行配置上传：
+
+```sh
+cp -n easytier.example.conf easytier.conf
+# 编辑 easytier.conf，填写真实组网参数
+shasum -a 256 -c easytier-mini-oray-wss-upx.sha256
+scp -O easytier-mini-oray-wss-upx oray:/root/easytier-mini.next
+# 仅新设备首次部署配置：
+scp -O easytier.conf oray:/root/easytier.conf
+```
+
+二进制上传到 `.next`，避免覆盖仍在运行的程序。在设备上先校验暂存文件：
+
+```sh
+echo '8d39807ab0d10a4dc53ffa1523bfc50ab9cab05fcd9e5a6052abfd5c5b9598ac  /root/easytier-mini.next' | sha256sum -c -
+chmod 700 /root/easytier-mini.next
+/root/easytier-mini.next --version
+```
+
+如果旧实例正在运行，先按下文停止并确认 `pidof easytier-mini` 无输出。
+保留旧程序及私有配置备份后，再替换并设置权限：
+
+```sh
+# 仅在校验成功、旧实例已停止后执行
+backup_dir=$(mktemp -d /root/easytier-backup-XXXXXXXX)
+chmod 700 "$backup_dir"
+cp -p /root/easytier.conf "$backup_dir/easytier.conf"
+chmod 600 "$backup_dir/easytier.conf"
+if [ -f /root/easytier-mini ]; then
+    mv /root/easytier-mini "$backup_dir/easytier-mini"
+fi
+mv /root/easytier-mini.next /root/easytier-mini
+chmod 700 /root/easytier-mini
+chmod 600 /root/easytier.conf
+```
+
+程序运行于持久 Flash 的 `/root`，没有放到内存 `/tmp` 执行。
+本仓库只附 1,760,432 字节的 UPX 版；来源及验证范围见 [EASYTIER-BINARY.md](EASYTIER-BINARY.md)。
+
 ## 4. 日常使用
 
 Leaf + HEV 联合模式使用下面的命令；修改 `/root/leaf.json` 或 `/root/hev.yml` 后执行 `restart`：
@@ -374,6 +468,58 @@ tail -f /tmp/hev-manager.log
 ```
 
 修改代理地址、端口或密码后执行 `restart`。更换网络或 WAN 地址/网段变化后，需要执行 `restart`。正常的 `/etc/init.d/firewall reload` 会从 fw4 include 重新加载 HEV 规则，不需要重启 HEV；已验证连续两次重载不会重复规则。目前没有开机自启；设备重启后需手动执行 `start`。
+
+### EasyTier 启动、停止与代理依赖
+
+`hev-manager-with-leaf.sh` 只管理 Leaf 与 HEV，不会自动启动或停止 EasyTier。
+需要代理访问 WSS 的网络，应先启动 Leaf + HEV，再启动 EasyTier：
+
+```sh
+/root/hev-manager-with-leaf.sh start
+if pidof easytier-mini >/dev/null; then
+    echo 'EasyTier already running; stop it before restarting'
+else
+    nohup /root/easytier-mini --config /root/easytier.conf \
+        </dev/null >/tmp/easytier-mini.log 2>&1 &
+    echo $! > /tmp/easytier-mini.pid
+fi
+```
+
+`nohup` 为后台启动，断开 SSH 后继续运行；没有默认开机自启。
+直接执行 `./easytier-mini --config easytier.conf` 则是前台启动，Ctrl+C 会停止。
+
+在设备上查看状态或停止 EasyTier：
+
+```sh
+pidof easytier-mini
+ip -4 addr show et0
+tail -n 30 /tmp/easytier-mini.log
+
+# 停止当前 Mini，等待 pidof 无输出后再重新启动
+for p in $(pidof easytier-mini); do kill -INT "$p"; done
+```
+
+修改配置后先停止再启动；重启 Leaf + HEV 会重新建立映射 DNS，随后也应重启
+EasyTier，避免它继续使用旧映射地址。关闭整个组合时，先停止 EasyTier，
+再执行 `/root/hev-manager-with-leaf.sh stop`。
+
+本次网络的普通 DNS 返回异常地址，改用加密 DNS 查询的真实地址后直连 TLS 仍失败；
+启用代理后，同一个 WSS 地址成功连接。这是当前网络的可达性问题，EasyTier
+本身不强制依赖 Leaf 或 HEV。使用代理时不要在 `/etc/hosts` 固定该 WSS 域名的
+真实 IP，否则会绕过映射 DNS 的代理路径；排查时添加的两条临时 hosts 已撤销。
+TXT DNS/STUN 警告是 Mini 裁剪和当前网络的限制，不能仅凭这些警告判断 WSS 失败。
+
+当前设备的实际路径为：
+
+```text
+EasyTier WSS → 映射 DNS 198.19.* → HEV tun0 → Leaf SOCKS5 → VMess → WSS 中继
+虚拟 IP 10.126.126.2 → EasyTier et0 → 对端（可使用独立的局域网 TCP 直连）
+```
+
+已验证 WSS 中继连接和节点发现成功；从设备通过 `et0` ping `10.126.126.1`
+3 次全部成功，平均约 3.54 ms，当时使用局域网 TCP 直连。公网 WSS 中继数据吞吐
+及 UDP 打洞尚未实测。此验证针对设备自身；Wi-Fi/LAN 客户端访问组网还需配置
+路由及 fw4 放行规则，现有 HEV 客户端接管规则没有自动适配 `et0`。
 
 ### 关闭白色指示灯
 
@@ -578,5 +724,7 @@ nft list table inet hev_manager
 
 - [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel)：TUN 转 SOCKS5 程序、配置格式和原理参考。
 - [官方配置示例](https://github.com/heiher/hev-socks5-tunnel#config)：隧道、代理、映射 DNS 及其他运行参数。
+- [EasyTier](https://github.com/EasyTier/EasyTier)：组网程序与 Mini 上游源码。
+- [本次 Mini WS/WSS 源码](https://github.com/yuliyang2023/EasyTier/tree/8bdf682b65b2fe758721f5ba5fc5fba912b95d89)：对应二进制的修改及 GitHub Actions。
 
 本 README 说明的是本目录中 `hev-manager.sh` 的行为，不能替代不同版本 HEV 或其他设备固件的兼容性验证。
