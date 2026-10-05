@@ -544,6 +544,81 @@ EasyTier WSS → 映射 DNS 198.19.* → HEV tun0 → Leaf SOCKS5 → VMess → 
 及 UDP 打洞尚未实测。此验证针对设备自身；Wi-Fi/LAN 客户端访问组网还需配置
 路由及 fw4 放行规则，现有 HEV 客户端接管规则没有自动适配 `et0`。
 
+### 通过 et0 放行 SSH（不限定 IP）
+
+在运行 EasyTier 的 X1 上，允许从 `et0` 进入的 TCP 22 访问本机 SSH。
+规则不设置源 IP、目标 IP 或地址族限制，适用于 IPv4 和 IPv6；EasyTier
+网段或节点地址变化后无需修改规则，只需保持接口名为 `et0`。
+Dropbear 需监听 TCP 22 和 EasyTier 地址（监听全部地址也可以），原有 SSH
+密钥认证设置保持不变。
+
+先通过现有管理连接登录设备：
+
+```sh
+ssh oray
+```
+
+然后在设备上执行以下步骤。HEV 运行时可能存在未提交的 UCI 防火墙变更，
+因此直接追加这条规则到 `/etc/config/firewall`，不执行 `uci commit firewall`，
+避免把其他临时变更一起保存。配置检查或加载失败时恢复备份：
+
+```sh
+set -eu
+if uci -q get firewall.easytier_ssh >/dev/null; then
+    echo 'easytier_ssh 已存在，请先检查现有规则，勿重复添加。' >&2
+    exit 1
+fi
+
+task_backup=$(mktemp -d /tmp/easytier-ssh-firewall.XXXXXX)
+cp -p /etc/config/firewall "$task_backup/firewall"
+uci changes firewall > "$task_backup/pending.before"
+
+cat >> /etc/config/firewall <<'RULE'
+
+config rule 'easytier_ssh'
+    option name 'Allow-EasyTier-SSH'
+    option src '*'
+    option device 'et0'
+    option direction 'in'
+    option proto 'tcp'
+    option dest_port '22'
+    option target 'ACCEPT'
+RULE
+
+if ! fw4 check; then
+    cp -p "$task_backup/firewall" /etc/config/firewall
+    exit 1
+fi
+uci changes firewall > "$task_backup/pending.after"
+if ! cmp -s "$task_backup/pending.before" "$task_backup/pending.after"; then
+    cp -p "$task_backup/firewall" /etc/config/firewall
+    echo 'UCI 待提交变更发生变化，已恢复配置。' >&2
+    exit 1
+fi
+if ! fw4 reload; then
+    cp -p "$task_backup/firewall" /etc/config/firewall
+    fw4 reload
+    exit 1
+fi
+
+uci show firewall.easytier_ssh
+nft list chain inet fw4 input | grep -F 'Allow-EasyTier-SSH'
+echo "备份目录：$task_backup"
+```
+
+生成的 nftables 规则应包含 `iifname "et0" tcp dport 22` 和 `accept`，
+没有 IP 地址匹配条件。规则保存在 `/etc/config/firewall`，设备重启或防火墙
+重新加载后仍有效；`/tmp` 中的备份仅保留至设备重启。
+
+从另一个 EasyTier 节点连接，替换为目标设备当前的虚拟 IP：
+
+```sh
+ssh root@10.126.126.3
+```
+
+本次新 X1 的虚拟 IP 为 `10.126.126.3`，已从对端验证 TCP 22 可达并收到
+`SSH-2.0-dropbear` 响应。实际登录仍需已有的 SSH 授权密钥。
+
 ### 关闭白色指示灯
 
 本次 X1-3111 的白灯对应 `/sys/class/leds/white:status`。在本机执行以下命令，立即关闭并保存为开机关闭设置：
