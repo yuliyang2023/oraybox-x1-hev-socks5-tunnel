@@ -18,7 +18,7 @@
 | `leaf-oray-vmess-ws-upx` | 适配 Oray X1 的 Leaf VMess TCP/WS UPX 二进制，约 1.403 MiB |
 | `leaf.example.json` | 不含真实节点信息的 Leaf 配置模板，复制成私有 `leaf.json` 后填写 |
 | `LEAF-BINARY.md` | Leaf 二进制的构建来源、架构和校验说明 |
-| `easytier-mini-oray-wss-upx` | EasyTier Mini 2.7.0，支持 WS/WSS，UPX 版约 1.679 MiB |
+| `easytier-mini-oray-wss-upx` | EasyTier Mini 2.7.0，支持 WS/WSS 和子网代理，UPX 版约 1.680 MiB |
 | `easytier-manager.sh` | EasyTier 后台启动、停止、重启、状态、前置检查和日志管理 |
 | `easytier.example.conf` | 脱敏 TOML 配置模板，复制为私有 `easytier.conf` 后填写组网参数 |
 | `EASYTIER-BINARY.md` | EasyTier 构建来源、许可证及验证范围 |
@@ -381,6 +381,8 @@ uri = "wss://relay.example.com:8443/ws"
 [flags]
 bind_device = false
 dev_name = "et0"
+# OpenWrt 子网 TCP 转发使用用户态栈，避免内核代理端口被防火墙拒绝。
+use_smoltcp = true
 ```
 
 填写同一组网使用的真实名称和密钥，以及真实 WSS 域名、端口、路径；不要把
@@ -391,7 +393,11 @@ dev_name = "et0"
 - `dev_name = "et0"` 放在 `[flags]` 下，避免与 HEV 的 `tun0` 重名。
 - `bind_device = false` 让 WSS 连接遵循系统路由。默认物理网卡绑定会绕过 HEV，
   本次出现过域名已映射到 `198.19.*` 但连接仍超时的情况。
-- 这个 Mini 支持 WS/WSS，但不包含 WireGuard、QUIC、KCP 或完整核心的全部功能。
+- 需要导出子网时，在 `[flags]` 之前添加 `[[proxy_network]]` 和
+  `cidr = "192.168.1.0/24"`（按实际网段修改），重启后对端的 `proxy_cidrs` 应显示该网段。
+  `use_smoltcp = true` 已在 Oray 上验证 TCP 子网转发。HEV 的 DNS 防泄漏规则仍可能
+  限制对子网 DNS 服务的访问。
+- 这个 Mini 支持 WS/WSS 和 TCP/UDP/ICMP 子网代理，但不包含 WireGuard、QUIC、KCP 或完整核心的全部功能。
   管理 RPC 固定为 `127.0.0.1:15888`，不需要添加原完整版本的 RPC 配置。
 - 本样例和 Git 中的配置不含真实节点信息；私有 `easytier.conf` 与其备份均被忽略。
 
@@ -410,7 +416,7 @@ scp -O easytier.conf oray:/root/easytier.conf
 二进制上传到 `.next`，避免覆盖仍在运行的程序。在设备上先校验暂存文件：
 
 ```sh
-echo '8d39807ab0d10a4dc53ffa1523bfc50ab9cab05fcd9e5a6052abfd5c5b9598ac  /root/easytier-mini.next' | sha256sum -c -
+echo 'a2404d2af360560086d2e1ffeb425290be0e2df84ed38bae44bf1640a8a13fc0  /root/easytier-mini.next' | sha256sum -c -
 chmod 700 /root/easytier-mini.next
 /root/easytier-mini.next --version
 ```
@@ -434,7 +440,7 @@ chmod 600 /root/easytier.conf
 ```
 
 程序运行于持久 Flash 的 `/root`，没有放到内存 `/tmp` 执行。
-本仓库只附 1,760,432 字节的 UPX 版；来源及验证范围见 [EASYTIER-BINARY.md](EASYTIER-BINARY.md)。
+本仓库只附 1,762,068 字节的 UPX 版；来源及验证范围见 [EASYTIER-BINARY.md](EASYTIER-BINARY.md)。
 
 ## 4. 日常使用
 
@@ -823,6 +829,6 @@ nft list table inet hev_manager
 - [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel)：TUN 转 SOCKS5 程序、配置格式和原理参考。
 - [官方配置示例](https://github.com/heiher/hev-socks5-tunnel#config)：隧道、代理、映射 DNS 及其他运行参数。
 - [EasyTier](https://github.com/EasyTier/EasyTier)：组网程序与 Mini 上游源码。
-- [本次 Mini WS/WSS 源码](https://github.com/yuliyang2023/EasyTier/tree/8bdf682b65b2fe758721f5ba5fc5fba912b95d89)：对应二进制的修改及 GitHub Actions。
+- [本次 Mini WS/WSS 源码](https://github.com/yuliyang2023/EasyTier/tree/c2abfac4dc3072bed69fd73e72ca12a7c9ad447c)：对应二进制的修改及 GitHub Actions。
 
 本 README 说明的是本目录中 `hev-manager.sh` 的行为，不能替代不同版本 HEV 或其他设备固件的兼容性验证。
